@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import pytz
+import asyncio
 from herokutl.types import Message
 from .. import loader, utils
 
@@ -9,51 +10,47 @@ class NameChangerModule(loader.Module):
     """Модуль для автоматического изменения имени пользователя с текущим временем"""
     strings = {
         "name": "NameChanger",
-        "started": "✅ Автоматическая смена имени запущена!\nЧасовой пояс: {}",
+        "started": "✅ Автоматическая смена имени запущена!\nЧасовой пояс: {}\nИнтервал: {} секунд",
         "stopped": "❌ Автоматическая смена имени остановлена!",
-        "status": "📊 Статус автоматической смены имени: {}\nЧасовой пояс: {}\nСледующее обновление: {}",
+        "status": "📊 Статус автоматической смены имени: {}\nЧасовой пояс: {}\nИнтервал: {} секунд\nПоследнее обновление: {}\nСледующее обновление: {}",
         "format": "Lerman | {} | #KERNEL",
         "timezone_set": "✅ Часовой пояс установлен на: {}\nТекущее время: {}",
         "invalid_timezone": "❌ Неверный часовой пояс! Примеры правильных форматов:\n"
-                          "• <code>Asia/Almaty</code> (UTC+6)\n"
-                          "• <code>Europe/Moscow</code> (UTC+3)\n"
-                          "• <code>UTC+6</code>\n"
+                          "• <code>UTC+6</code> (рекомендуется)\n"
+                          "• <code>Asia/Dhaka</code> (Дакка, Бангладеш)\n"
                           "• <code>Etc/GMT-6</code>\n\n"
-                          "Список всех зон: https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568",
+                          "Для UTC+6 используйте: <code>UTC+6</code>",
         "current_timezone": "📍 Текущий часовой пояс: {}\n🕐 Текущее время: {}",
-        "timezone_list": "🌍 Популярные часовые пояса:\n"
-                        "• <code>Asia/Almaty</code> - UTC+6 (Казахстан)\n"
-                        "• <code>Europe/Moscow</code> - UTC+3 (Москва)\n"
-                        "• <code>Europe/London</code> - UTC+0 (Лондон)\n"
-                        "• <code>Asia/Tokyo</code> - UTC+9 (Токио)\n"
-                        "• <code>America/New_York</code> - UTC-5 (Нью-Йорк)\n"
-                        "• <code>UTC+6</code> - Прямое указание смещения\n"
+        "timezone_list": "🌍 Популярные часовые пояса UTC+6:\n"
+                        "• <code>UTC+6</code> - UTC+6 (рекомендуется)\n"
+                        "• <code>Asia/Dhaka</code> - Дакка, Бангладеш\n"
+                        "• <code>Asia/Almaty</code> - Алматы, Казахстан\n"
+                        "• <code>Asia/Bishkek</code> - Бишкек, Кыргызстан\n"
+                        "• <code>Asia/Omsk</code> - Омск, Россия\n"
                         "• <code>Etc/GMT-6</code> - Альтернативный формат UTC+6",
-        "next_update_in": "Следующее обновление через: {} секунд"
+        "interval_set": "✅ Интервал обновления установлен: {} секунд"
     }
     strings_ru = {
         "name": "СменаИмени",
-        "started": "✅ Автоматическая смена имени запущена!\nЧасовой пояс: {}",
+        "started": "✅ Автоматическая смена имени запущена!\nЧасовой пояс: {}\nИнтервал: {} секунд",
         "stopped": "❌ Автоматическая смена имени остановлена!",
-        "status": "📊 Статус автоматической смены имени: {}\nЧасовой пояс: {}\nСледующее обновление: {}",
+        "status": "📊 Статус автоматической смены имени: {}\nЧасовой пояс: {}\nИнтервал: {} секунд\nПоследнее обновление: {}\nСледующее обновление: {}",
         "format": "Lerman | {} | #KERNEL",
         "timezone_set": "✅ Часовой пояс установлен на: {}\nТекущее время: {}",
         "invalid_timezone": "❌ Неверный часовой пояс! Примеры правильных форматов:\n"
-                          "• <code>Asia/Almaty</code> (UTC+6)\n"
-                          "• <code>Europe/Moscow</code> (UTC+3)\n"
-                          "• <code>UTC+6</code>\n"
+                          "• <code>UTC+6</code> (рекомендуется)\n"
+                          "• <code>Asia/Dhaka</code> (Дакка, Бангладеш)\n"
                           "• <code>Etc/GMT-6</code>\n\n"
-                          "Список всех зон: https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568",
+                          "Для UTC+6 используйте: <code>UTC+6</code>",
         "current_timezone": "📍 Текущий часовой пояс: {}\n🕐 Текущее время: {}",
-        "timezone_list": "🌍 Популярные часовые пояса:\n"
-                        "• <code>Asia/Almaty</code> - UTC+6 (Казахстан)\n"
-                        "• <code>Europe/Moscow</code> - UTC+3 (Москва)\n"
-                        "• <code>Europe/London</code> - UTC+0 (Лондон)\n"
-                        "• <code>Asia/Tokyo</code> - UTC+9 (Токио)\n"
-                        "• <code>America/New_York</code> - UTC-5 (Нью-Йорк)\n"
-                        "• <code>UTC+6</code> - Прямое указание смещения\n"
+        "timezone_list": "🌍 Популярные часовые пояса UTC+6:\n"
+                        "• <code>UTC+6</code> - UTC+6 (рекомендуется)\n"
+                        "• <code>Asia/Dhaka</code> - Дакка, Бангладеш\n"
+                        "• <code>Asia/Almaty</code> - Алматы, Казахстан\n"
+                        "• <code>Asia/Bishkek</code> - Бишкек, Кыргызстан\n"
+                        "• <code>Asia/Omsk</code> - Омск, Россия\n"
                         "• <code>Etc/GMT-6</code> - Альтернативный формат UTC+6",
-        "next_update_in": "Следующее обновление через: {} секунд"
+        "interval_set": "✅ Интервал обновления установлен: {} секунд"
     }
 
     def __init__(self):
@@ -66,7 +63,7 @@ class NameChangerModule(loader.Module):
             ),
             loader.ConfigValue(
                 "timezone",
-                "Asia/Almaty",
+                "UTC+6",
                 "Часовой пояс для отображения времени",
                 validator=loader.validators.String()
             ),
@@ -80,6 +77,7 @@ class NameChangerModule(loader.Module):
         self.task = None
         self.last_update = None
         self.next_update = None
+        self.running = False
 
     async def client_ready(self, client, db):
         self.client = client
@@ -97,7 +95,7 @@ class NameChangerModule(loader.Module):
     def validate_timezone(self, timezone_str):
         """Проверяет валидность часового пояса"""
         try:
-            # Пытаемся создать временную зону
+            # Для UTC+6 формата
             if timezone_str.startswith("UTC"):
                 # Преобразуем UTC+6 в Etc/GMT-6
                 offset = timezone_str[3:]  # Получаем "+6" или "-5"
@@ -106,45 +104,47 @@ class NameChangerModule(loader.Module):
                 elif offset.startswith("-"):
                     gmt_offset = f"Etc/GMT{offset}"  # pytz использует обратную логику
                 else:
-                    gmt_offset = f"Etc/GMT{offset}"
+                    # Если нет знака, предполагаем положительное смещение
+                    gmt_offset = f"Etc/GMT-{offset}"
+                
+                # Проверяем что часовой пояс существует
                 pytz.timezone(gmt_offset)
-                return gmt_offset
+                return timezone_str  # Возвращаем оригинальный формат UTC+6
             else:
+                # Для обычных имен часовых поясов
                 pytz.timezone(timezone_str)
                 return timezone_str
         except:
-            # Если не удалось, пробуем Etc/GMT формат
-            try:
-                if not timezone_str.startswith("Etc/GMT"):
-                    # Пробуем добавить Etc/GMT
-                    if "+" in timezone_str or "-" in timezone_str:
-                        if timezone_str.startswith("UTC"):
-                            offset = timezone_str[3:]
-                            if offset.startswith("+"):
-                                gmt_offset = f"Etc/GMT-{offset[1:]}"
-                            elif offset.startswith("-"):
-                                gmt_offset = f"Etc/GMT{offset}"
-                            else:
-                                gmt_offset = f"Etc/GMT{offset}"
-                            pytz.timezone(gmt_offset)
-                            return gmt_offset
-                else:
-                    pytz.timezone(timezone_str)
-                    return timezone_str
-            except:
-                return None
+            return None
+
+    def get_timezone_object(self):
+        """Получаем объект часового пояса"""
+        timezone_str = self.config["timezone"]
+        
+        # Обрабатываем формат UTC+6
+        if timezone_str.startswith("UTC"):
+            offset = timezone_str[3:]  # Получаем "+6" или "-5"
+            if offset.startswith("+"):
+                gmt_offset = f"Etc/GMT-{offset[1:]}"  # pytz использует обратную логику
+            elif offset.startswith("-"):
+                gmt_offset = f"Etc/GMT{offset}"  # pytz использует обратную логику
+            else:
+                # Если нет знака, предполагаем положительное смещение
+                gmt_offset = f"Etc/GMT-{offset}"
+            return pytz.timezone(gmt_offset)
+        else:
+            return pytz.timezone(timezone_str)
 
     def get_current_time(self):
         """Получаем текущее время в установленном часовом поясе"""
         try:
-            timezone_str = self.config["timezone"]
-            tz = pytz.timezone(timezone_str)
+            tz = self.get_timezone_object()
             current_time = datetime.now(tz)
             return current_time.strftime("%H:%M"), current_time.strftime("%H:%M:%S")
         except Exception as e:
             # Если часовой пояс невалидный, используем UTC+6 по умолчанию
             try:
-                tz = pytz.timezone("Asia/Almaty")
+                tz = pytz.timezone("Etc/GMT-6")
                 current_time = datetime.now(tz)
                 return current_time.strftime("%H:%M"), current_time.strftime("%H:%M:%S")
             except:
@@ -166,34 +166,48 @@ class NameChangerModule(loader.Module):
             
             self.last_update = datetime.now()
             self.next_update = self.last_update + timedelta(seconds=self.config["update_interval"])
+            return True
         except Exception as e:
-            # Логируем ошибку, но не прерываем выполнение
+            # Логируем ошибку
             print(f"Ошибка при обновлении имени: {e}")
+            return False
+
+    async def namechanger_task(self):
+        """Задача для периодического обновления имени"""
+        while self.running:
+            await self.update_name()
+            await asyncio.sleep(self.config["update_interval"])
 
     async def start_namechanger(self):
         """Запускает автоматическую смену имени"""
-        if self.task:
-            self.task.cancel()
+        # Останавливаем существующую задачу если есть
+        await self.stop_namechanger()
         
         # Обновляем сразу при запуске
-        await self.update_name()
+        success = await self.update_name()
+        if not success:
+            return False
         
         # Запускаем периодическую задачу
-        self.task = self.inline.task(
-            lambda: self.update_name(), 
-            interval=self.config["update_interval"]
-        )
         self.running = True
         self.db.set("NameChanger", "running", True)
+        
+        # Создаем асинхронную задачу
+        self.task = asyncio.create_task(self.namechanger_task())
+        return True
 
     async def stop_namechanger(self):
         """Останавливает автоматическую смену имени"""
-        if self.task:
-            self.task.cancel()
-            self.task = None
-        
         self.running = False
         self.db.set("NameChanger", "running", False)
+        
+        if self.task:
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+            self.task = None
 
     @loader.command(
         ru_doc="Запустить автоматическую смену имени",
@@ -201,9 +215,17 @@ class NameChangerModule(loader.Module):
     )
     async def startnamecmd(self, message: Message):
         """Запустить автоматическую смену имени"""
-        await self.start_namechanger()
-        timezone = self.config["timezone"]
-        await utils.answer(message, self.strings("started").format(timezone))
+        if self.running:
+            await utils.answer(message, "⚠️ Автоматическая смена имени уже запущена!")
+            return
+        
+        success = await self.start_namechanger()
+        if success:
+            timezone = self.config["timezone"]
+            interval = self.config["update_interval"]
+            await utils.answer(message, self.strings("started").format(timezone, interval))
+        else:
+            await utils.answer(message, "❌ Не удалось запустить смену имени!")
 
     @loader.command(
         ru_doc="Остановить автоматическую смену имени",
@@ -211,6 +233,10 @@ class NameChangerModule(loader.Module):
     )
     async def stopnamecmd(self, message: Message):
         """Остановить автоматическую смену имени"""
+        if not self.running:
+            await utils.answer(message, "⚠️ Автоматическая смена имени уже остановлена!")
+            return
+        
         await self.stop_namechanger()
         await utils.answer(message, self.strings("stopped"))
 
@@ -222,43 +248,60 @@ class NameChangerModule(loader.Module):
         """Показать статус автоматической смены имени"""
         status = "✅ Включена" if self.running else "❌ Выключена"
         timezone = self.config["timezone"]
+        interval = self.config["update_interval"]
         
         # Получаем текущее время для отображения
         current_time, full_time = self.get_current_time()
         
-        # Рассчитываем время до следующего обновления
+        # Форматируем время последнего обновления
+        last_update_str = "Никогда"
+        if self.last_update:
+            last_update_str = self.last_update.strftime("%H:%M:%S")
+        
+        # Форматируем время следующего обновления
         next_update_str = "Неизвестно"
         if self.running and self.next_update:
             now = datetime.now()
             if self.next_update > now:
                 seconds_left = (self.next_update - now).seconds
-                next_update_str = f"{seconds_left}с"
+                next_update_str = f"через {seconds_left} секунд"
             else:
                 next_update_str = "Скоро"
         
         await utils.answer(
             message, 
-            self.strings("status").format(status, timezone, next_update_str)
+            self.strings("status").format(
+                status, 
+                timezone, 
+                interval,
+                last_update_str,
+                next_update_str
+            )
         )
 
     @loader.command(
-        ru_doc="Установить часовой пояс (пример: .settimezone Asia/Almaty)",
+        ru_doc="Установить часовой пояс (пример: .settimezone UTC+6)",
         alias="settimezone"
     )
     async def settimezonecmd(self, message: Message):
         """Установить часовой пояс"""
         args = utils.get_args_raw(message)
         if not args:
-            await utils.answer(message, "❌ Укажите часовой пояс!\nПример: <code>.settimezone Asia/Almaty</code>")
+            await utils.answer(message, "❌ Укажите часовой пояс!\nПример: <code>.settimezone UTC+6</code>")
             return
         
         validated_tz = self.validate_timezone(args)
         if validated_tz:
+            old_timezone = self.config["timezone"]
             self.config["timezone"] = validated_tz
+            
             current_time, full_time = self.get_current_time()
             await utils.answer(
                 message, 
-                self.strings("timezone_set").format(validated_tz, full_time)
+                f"✅ Часовой пояс изменен:\n"
+                f"Старый: {old_timezone}\n"
+                f"Новый: {validated_tz}\n"
+                f"Текущее время: {full_time}"
             )
             
             # Если смена имени запущена, обновляем сразу
@@ -281,12 +324,17 @@ class NameChangerModule(loader.Module):
         )
 
     @loader.command(
-        ru_doc="Список популярных часовых поясов",
+        ru_doc="Список популярных часовых поясов UTC+6",
         alias="timezones"
     )
     async def timezonescmd(self, message: Message):
-        """Список популярных часовых поясов"""
-        await utils.answer(message, self.strings("timezone_list"))
+        """Список популярных часовых поясов UTC+6"""
+        current_timezone = self.config["timezone"]
+        await utils.answer(
+            message, 
+            f"{self.strings('timezone_list')}\n\n"
+            f"📍 Текущий часовой пояс: {current_timezone}"
+        )
 
     @loader.command(
         ru_doc="Обновить имя вручную",
@@ -294,9 +342,17 @@ class NameChangerModule(loader.Module):
     )
     async def updatenamecmd(self, message: Message):
         """Обновить имя вручную"""
-        await self.update_name()
-        current_time, full_time = self.get_current_time()
-        await utils.answer(message, f"✅ Имя обновлено вручную\n🕐 Время: {full_time}")
+        success = await self.update_name()
+        if success:
+            current_time, full_time = self.get_current_time()
+            await utils.answer(
+                message, 
+                f"✅ Имя обновлено вручную\n"
+                f"📍 Часовой пояс: {self.config['timezone']}\n"
+                f"🕐 Время: {full_time}"
+            )
+        else:
+            await utils.answer(message, "❌ Не удалось обновить имя!")
 
     @loader.command(
         ru_doc="Показать текущее время для формата имени",
@@ -343,7 +399,8 @@ class NameChangerModule(loader.Module):
             self.config['update_interval'] = interval
             
             # Перезапускаем задачу если она запущена
-            if self.running:
+            was_running = self.running
+            if was_running:
                 await self.stop_namechanger()
                 await self.start_namechanger()
             
@@ -356,28 +413,48 @@ class NameChangerModule(loader.Module):
         except ValueError:
             await utils.answer(message, "❌ Интервал должен быть числом!")
 
-    @loader.watcher(only_pm=False, only_outgoing=False, only_messages=False)
+    async def on_unload(self):
+        """Вызывается при выгрузке модуля"""
+        await self.stop_namechanger()
+
+    @loader.watcher()
     async def watcher(self, message: Message):
-        """Вотчер для обработки команд в любом чате"""
-        text = utils.get_args_raw(message)
+        """Вотчер для обработки команд"""
+        text = message.raw_text or ""
         
-        if text:
-            text_lower = text.lower()
-            if text_lower == "namestatus":
-                await self.namestatuscmd(message)
-            elif text_lower == "startname":
-                await self.startnamecmd(message)
-            elif text_lower == "stopname":
-                await self.stopnamecmd(message)
-            elif text_lower == "updatename":
-                await self.updatenamecmd(message)
-            elif text_lower == "showtime":
-                await self.showtimecmd(message)
-            elif text_lower == "timezone":
-                await self.timezonecmd(message)
-            elif text_lower == "timezones":
-                await self.timezonescmd(message)
-            elif text_lower.startswith("settimezone"):
-                await self.settimezonecmd(message)
-            elif text_lower.startswith("setinterval"):
-                await self.setintervalcmd(message)
+        if not text.startswith("."):
+            return
+            
+        command = text[1:].lower().split()[0] if len(text) > 1 else ""
+        args = " ".join(text.split()[1:]) if len(text.split()) > 1 else ""
+        
+        # Создаем фиктивное сообщение с аргументами
+        if command == "namestatus":
+            await self.namestatuscmd(message)
+        elif command == "startname":
+            await self.startnamecmd(message)
+        elif command == "stopname":
+            await self.stopnamecmd(message)
+        elif command == "updatename":
+            await self.updatenamecmd(message)
+        elif command == "showtime":
+            await self.showtimecmd(message)
+        elif command == "timezone":
+            await self.timezonecmd(message)
+        elif command == "timezones":
+            await self.timezonescmd(message)
+        elif command == "settimezone":
+            if args:
+                # Создаем сообщение с аргументами
+                fake_msg = await message.reply("Processing...")
+                fake_msg.raw_text = f".settimezone {args}"
+                await self.settimezonecmd(fake_msg)
+            else:
+                await utils.answer(message, "❌ Укажите часовой пояс!")
+        elif command == "setinterval":
+            if args:
+                fake_msg = await message.reply("Processing...")
+                fake_msg.raw_text = f".setinterval {args}"
+                await self.setintervalcmd(fake_msg)
+            else:
+                await utils.answer(message, "❌ Укажите интервал!")
