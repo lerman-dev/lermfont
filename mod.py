@@ -1,93 +1,80 @@
 from datetime import datetime
-import pytz
 import asyncio
+from .. import loader, utils
 from herokutl.types import Message
-from .. import loader
+from herokutl.tl.functions.account import UpdateProfileRequest
 
 
 @loader.tds
-class NameChanger(loader.Module):
-    """Автоматическая смена имени с временем UTC+6"""
-    strings = {"name": "NameChanger"}
+class AutoNameChanger(loader.Module):
+    """Автоматически меняет имя с текущим временем UTC+6"""
+    strings = {"name": "AutoNameChanger"}
 
     def __init__(self):
-        self.config = loader.ModuleConfig(
-            loader.ConfigValue(
-                "timezone",
-                "UTC+6",
-                "Часовой пояс для времени",
-                validator=loader.validators.String()
-            ),
-        )
+        self.is_running = False
         self.task = None
-        self.is_active = False
 
     async def client_ready(self, client, db):
         self.client = client
-        self.db = db
+        self._db = db
         
-        # Проверяем, был ли модуль активен
-        self.is_active = self.db.get("NameChanger", "active", False)
-        if self.is_active:
-            await self._start_changing()
+        # Проверяем, был ли запущен
+        self.is_running = self._db.get("AutoNameChanger", "running", False)
+        if self.is_running:
+            await self._start_auto_change()
 
-    def _get_time(self):
-        """Получает текущее время в UTC+6"""
-        try:
-            # UTC+6 это Etc/GMT-6 в pytz
-            tz = pytz.timezone("Etc/GMT-6")
-            return datetime.now(tz).strftime("%H:%M")
-        except:
-            # Если ошибка, используем локальное время +6 часов
-            return (datetime.utcnow() + pytz.utc._utcoffset).strftime("%H:%M")
+    def get_utc6_time(self):
+        """Получаем время в формате UTC+6"""
+        utc_now = datetime.utcnow()
+        # Добавляем 6 часов для UTC+6
+        utc6_hour = (utc_now.hour + 6) % 24
+        return f"{utc6_hour:02d}:{utc_now.minute:02d}"
 
-    async def _change_name_once(self):
-        """Меняет имя один раз"""
+    async def change_name_now(self):
+        """Меняет имя прямо сейчас"""
         try:
-            current_time = self._get_time()
-            new_name = f"Lerman | {current_time} | #KERNEL"
+            time_str = self.get_utc6_time()
+            new_name = f"Lerman | {time_str} | #KERNEL"
             
-            # Простая смена имени
-            result = await self.client(
-                self.client.functions.account.UpdateProfile(
-                    first_name=new_name,
-                    last_name=""
-                )
-            )
+            # Используем UpdateProfileRequest как в примере
+            await self.client(UpdateProfileRequest(
+                first_name=new_name,
+                last_name=""
+            ))
             return True
         except Exception as e:
-            # Если имя не изменилось (уже такое же) - это не ошибка
+            # Если имя уже такое же, это не ошибка
             if "not modified" not in str(e).lower():
-                print(f"[NameChanger] Ошибка: {e}")
+                print(f"AutoNameChanger error: {e}")
             return True
 
-    async def _changer_loop(self):
-        """Основной цикл смены имени"""
-        while self.is_active:
-            await self._change_name_once()
-            await asyncio.sleep(60)  # Ждем минуту
+    async def _auto_change_loop(self):
+        """Цикл автоматической смены имени"""
+        while self.is_running:
+            await self.change_name_now()
+            await asyncio.sleep(60)  # Каждую минуту
 
-    async def _start_changing(self):
-        """Запускает смену имени"""
+    async def _start_auto_change(self):
+        """Запускает автоматическую смену имени"""
         if self.task:
             try:
                 self.task.cancel()
             except:
                 pass
         
-        self.is_active = True
-        self.db.set("NameChanger", "active", True)
+        self.is_running = True
+        self._db.set("AutoNameChanger", "running", True)
         
-        # Первое изменение
-        await self._change_name_once()
+        # Меняем сразу
+        await self.change_name_now()
         
         # Запускаем цикл
-        self.task = asyncio.create_task(self._changer_loop())
+        self.task = asyncio.create_task(self._auto_change_loop())
 
-    async def _stop_changing(self):
-        """Останавливает смену имени"""
-        self.is_active = False
-        self.db.set("NameChanger", "active", False)
+    async def _stop_auto_change(self):
+        """Останавливает автоматическую смену имени"""
+        self.is_running = False
+        self._db.set("AutoNameChanger", "running", False)
         
         if self.task:
             self.task.cancel()
@@ -98,44 +85,60 @@ class NameChanger(loader.Module):
             self.task = None
 
     @loader.command(
-        ru_doc="Запустить автоматическую смену имени"
+        ru_doc="Запустить автосмену имени"
     )
     async def startname(self, message: Message):
-        """Запустить смену имени"""
-        if self.is_active:
-            await message.delete()
+        """Запустить автосмену имени"""
+        if self.is_running:
+            try:
+                await message.delete()
+            except:
+                pass
             return
         
-        await self._start_changing()
+        await self._start_auto_change()
+        await utils.answer(message, "✅ Автосмена имени запущена!")
+        await asyncio.sleep(2)
         await message.delete()
 
     @loader.command(
-        ru_doc="Остановить автоматическую смену имени"
+        ru_doc="Остановить автосмену имени"
     )
     async def stopname(self, message: Message):
-        """Остановить смену имени"""
-        if not self.is_active:
-            await message.delete()
+        """Остановить автосмену имени"""
+        if not self.is_running:
+            try:
+                await message.delete()
+            except:
+                pass
             return
         
-        await self._stop_changing()
+        await self._stop_auto_change()
+        await utils.answer(message, "❌ Автосмена имени остановлена!")
+        await asyncio.sleep(2)
         await message.delete()
 
     @loader.command(
-        ru_doc="Проверить работу модуля (тестовая смена имени)"
+        ru_doc="Сменить имя один раз"
     )
-    async def nametest(self, message: Message):
-        """Тестовая смена имени"""
-        success = await self._change_name_once()
-        if success:
-            await message.edit("✅ Имя успешно изменено!")
-            await asyncio.sleep(2)
-            await message.delete()
-        else:
-            await message.edit("❌ Не удалось изменить имя")
-            await asyncio.sleep(2)
-            await message.delete()
+    async def changename(self, message: Message):
+        """Сменить имя один раз"""
+        await self.change_name_now()
+        time_str = self.get_utc6_time()
+        await utils.answer(message, f"✅ Имя изменено на: Lerman | {time_str} | #KERNEL")
+        await asyncio.sleep(2)
+        await message.delete()
+
+    @loader.command(
+        ru_doc="Показать текущее время UTC+6"
+    )
+    async def showtime(self, message: Message):
+        """Показать текущее время UTC+6"""
+        time_str = self.get_utc6_time()
+        await utils.answer(message, f"🕐 Текущее время UTC+6: {time_str}")
+        await asyncio.sleep(2)
+        await message.delete()
 
     async def on_unload(self):
         """При выгрузке модуля"""
-        await self._stop_changing()
+        await self._stop_auto_change()
