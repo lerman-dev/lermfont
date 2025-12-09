@@ -28,7 +28,9 @@ class NameChangerModule(loader.Module):
                         "• <code>Asia/Bishkek</code> - Бишкек, Кыргызстан\n"
                         "• <code>Asia/Omsk</code> - Омск, Россия\n"
                         "• <code>Etc/GMT-6</code> - Альтернативный формат UTC+6",
-        "interval_set": "✅ Интервал обновления установлен: {} секунд"
+        "interval_set": "✅ Интервал обновления установлен: {} секунд",
+        "no_change": "⚠️ Имя не изменилось (уже установлено такое же значение)",
+        "test_name": "✅ Тестовое имя установлено: {}"
     }
     strings_ru = {
         "name": "СменаИмени",
@@ -50,7 +52,9 @@ class NameChangerModule(loader.Module):
                         "• <code>Asia/Bishkek</code> - Бишкек, Кыргызстан\n"
                         "• <code>Asia/Omsk</code> - Омск, Россия\n"
                         "• <code>Etc/GMT-6</code> - Альтернативный формат UTC+6",
-        "interval_set": "✅ Интервал обновления установлен: {} секунд"
+        "interval_set": "✅ Интервал обновления установлен: {} секунд",
+        "no_change": "⚠️ Имя не изменилось (уже установлено такое же значение)",
+        "test_name": "✅ Тестовое имя установлено: {}"
     }
 
     def __init__(self):
@@ -78,6 +82,7 @@ class NameChangerModule(loader.Module):
         self.last_update = None
         self.next_update = None
         self.running = False
+        self.current_name = None
 
     async def client_ready(self, client, db):
         self.client = client
@@ -96,8 +101,9 @@ class NameChangerModule(loader.Module):
         """Проверяет валидность часового пояса"""
         try:
             # Для UTC+6 формата
-            if timezone_str.startswith("UTC"):
+            if timezone_str.upper().startswith("UTC"):
                 # Преобразуем UTC+6 в Etc/GMT-6
+                timezone_str = timezone_str.upper()
                 offset = timezone_str[3:]  # Получаем "+6" или "-5"
                 if offset.startswith("+"):
                     gmt_offset = f"Etc/GMT-{offset[1:]}"  # pytz использует обратную логику
@@ -122,7 +128,8 @@ class NameChangerModule(loader.Module):
         timezone_str = self.config["timezone"]
         
         # Обрабатываем формат UTC+6
-        if timezone_str.startswith("UTC"):
+        if timezone_str.upper().startswith("UTC"):
+            timezone_str = timezone_str.upper()
             offset = timezone_str[3:]  # Получаем "+6" или "-5"
             if offset.startswith("+"):
                 gmt_offset = f"Etc/GMT-{offset[1:]}"  # pytz использует обратную логику
@@ -152,40 +159,71 @@ class NameChangerModule(loader.Module):
                 current_time = datetime.now()
                 return current_time.strftime("%H:%M"), current_time.strftime("%H:%M:%S")
 
-    async def update_name(self):
+    async def update_name(self, force=False):
         """Обновляет имя пользователя"""
         try:
             current_time, full_time = self.get_current_time()
             new_name = self.strings("format").format(current_time)
             
-            await self.client(
-                self.client.functions.account.UpdateProfile(
-                    first_name=new_name
-                )
-            )
+            # Проверяем, изменилось ли имя
+            if not force and self.current_name == new_name:
+                return True, "no_change"
             
-            self.last_update = datetime.now()
-            self.next_update = self.last_update + timedelta(seconds=self.config["update_interval"])
-            return True
+            # Получаем текущий профиль для проверки
+            try:
+                me = await self.client.get_me()
+                current_first_name = me.first_name or ""
+            except:
+                current_first_name = ""
+            
+            # Пытаемся обновить имя
+            try:
+                await self.client(
+                    self.client.functions.account.UpdateProfile(
+                        first_name=new_name
+                    )
+                )
+                self.current_name = new_name
+                self.last_update = datetime.now()
+                self.next_update = self.last_update + timedelta(seconds=self.config["update_interval"])
+                return True, "updated"
+            except Exception as e:
+                # Если имя не изменилось (уже такое же)
+                if "not modified" in str(e).lower():
+                    self.current_name = new_name
+                    return True, "no_change"
+                else:
+                    raise e
+                    
         except Exception as e:
             # Логируем ошибку
             print(f"Ошибка при обновлении имени: {e}")
-            return False
+            return False, str(e)
 
     async def namechanger_task(self):
         """Задача для периодического обновления имени"""
         while self.running:
-            await self.update_name()
-            await asyncio.sleep(self.config["update_interval"])
+            try:
+                success, status = await self.update_name()
+                if not success:
+                    print(f"Не удалось обновить имя: {status}")
+                
+                await asyncio.sleep(self.config["update_interval"])
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"Ошибка в задаче обновления имени: {e}")
+                await asyncio.sleep(self.config["update_interval"])
 
     async def start_namechanger(self):
         """Запускает автоматическую смену имени"""
         # Останавливаем существующую задачу если есть
-        await self.stop_namechanger()
+        if self.running:
+            await self.stop_namechanger()
         
         # Обновляем сразу при запуске
-        success = await self.update_name()
-        if not success:
+        success, status = await self.update_name(force=True)
+        if not success and status != "no_change":
             return False
         
         # Запускаем периодическую задачу
@@ -268,15 +306,19 @@ class NameChangerModule(loader.Module):
             else:
                 next_update_str = "Скоро"
         
+        # Получаем текущее имя
+        current_name = self.current_name or "Неизвестно"
+        
         await utils.answer(
             message, 
-            self.strings("status").format(
-                status, 
-                timezone, 
-                interval,
-                last_update_str,
-                next_update_str
-            )
+            f"📊 <b>Статус смены имени</b>\n\n"
+            f"• Статус: {status}\n"
+            f"• Часовой пояс: {timezone}\n"
+            f"• Интервал: {interval} секунд\n"
+            f"• Текущее время: {full_time}\n"
+            f"• Последнее обновление: {last_update_str}\n"
+            f"• Следующее обновление: {next_update_str}\n"
+            f"• Текущее имя: {current_name}"
         )
 
     @loader.command(
@@ -306,7 +348,7 @@ class NameChangerModule(loader.Module):
             
             # Если смена имени запущена, обновляем сразу
             if self.running:
-                await self.update_name()
+                await self.update_name(force=True)
         else:
             await utils.answer(message, self.strings("invalid_timezone"))
 
@@ -342,17 +384,20 @@ class NameChangerModule(loader.Module):
     )
     async def updatenamecmd(self, message: Message):
         """Обновить имя вручную"""
-        success = await self.update_name()
+        success, status = await self.update_name(force=True)
         if success:
-            current_time, full_time = self.get_current_time()
-            await utils.answer(
-                message, 
-                f"✅ Имя обновлено вручную\n"
-                f"📍 Часовой пояс: {self.config['timezone']}\n"
-                f"🕐 Время: {full_time}"
-            )
+            if status == "no_change":
+                await utils.answer(message, self.strings("no_change"))
+            else:
+                current_time, full_time = self.get_current_time()
+                await utils.answer(
+                    message, 
+                    f"✅ Имя обновлено вручную\n"
+                    f"📍 Часовой пояс: {self.config['timezone']}\n"
+                    f"🕐 Время: {full_time}"
+                )
         else:
-            await utils.answer(message, "❌ Не удалось обновить имя!")
+            await utils.answer(message, f"❌ Не удалось обновить имя!\nОшибка: {status}")
 
     @loader.command(
         ru_doc="Показать текущее время для формата имени",
@@ -366,7 +411,7 @@ class NameChangerModule(loader.Module):
             message, 
             f"📍 Часовой пояс: {self.config['timezone']}\n"
             f"🕐 Текущее время: {full_time}\n"
-            f"📝 Имя будет: {formatted_name}"
+            f"📝 Имя будет: <code>{formatted_name}</code>"
         )
 
     @loader.command(
@@ -413,48 +458,24 @@ class NameChangerModule(loader.Module):
         except ValueError:
             await utils.answer(message, "❌ Интервал должен быть числом!")
 
+    @loader.command(
+        ru_doc="Установить тестовое имя для проверки",
+        alias="testname"
+    )
+    async def testnamecmd(self, message: Message):
+        """Установить тестовое имя для проверки"""
+        try:
+            test_name = "Lerman | TEST | #KERNEL"
+            await self.client(
+                self.client.functions.account.UpdateProfile(
+                    first_name=test_name
+                )
+            )
+            self.current_name = test_name
+            await utils.answer(message, self.strings("test_name").format(test_name))
+        except Exception as e:
+            await utils.answer(message, f"❌ Не удалось установить тестовое имя: {e}")
+
     async def on_unload(self):
         """Вызывается при выгрузке модуля"""
         await self.stop_namechanger()
-
-    @loader.watcher()
-    async def watcher(self, message: Message):
-        """Вотчер для обработки команд"""
-        text = message.raw_text or ""
-        
-        if not text.startswith("."):
-            return
-            
-        command = text[1:].lower().split()[0] if len(text) > 1 else ""
-        args = " ".join(text.split()[1:]) if len(text.split()) > 1 else ""
-        
-        # Создаем фиктивное сообщение с аргументами
-        if command == "namestatus":
-            await self.namestatuscmd(message)
-        elif command == "startname":
-            await self.startnamecmd(message)
-        elif command == "stopname":
-            await self.stopnamecmd(message)
-        elif command == "updatename":
-            await self.updatenamecmd(message)
-        elif command == "showtime":
-            await self.showtimecmd(message)
-        elif command == "timezone":
-            await self.timezonecmd(message)
-        elif command == "timezones":
-            await self.timezonescmd(message)
-        elif command == "settimezone":
-            if args:
-                # Создаем сообщение с аргументами
-                fake_msg = await message.reply("Processing...")
-                fake_msg.raw_text = f".settimezone {args}"
-                await self.settimezonecmd(fake_msg)
-            else:
-                await utils.answer(message, "❌ Укажите часовой пояс!")
-        elif command == "setinterval":
-            if args:
-                fake_msg = await message.reply("Processing...")
-                fake_msg.raw_text = f".setinterval {args}"
-                await self.setintervalcmd(fake_msg)
-            else:
-                await utils.answer(message, "❌ Укажите интервал!")
