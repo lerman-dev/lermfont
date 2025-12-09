@@ -1,69 +1,141 @@
-import asyncio
 from datetime import datetime
-from .. import loader
+import pytz
+import asyncio
 from herokutl.types import Message
+from .. import loader
 
 
 @loader.tds
-class NameUpdater(loader.Module):
-    """Обновляет имя с временем UTC+6"""
-    strings = {"name": "NameUpdater"}
+class NameChanger(loader.Module):
+    """Автоматическая смена имени с временем UTC+6"""
+    strings = {"name": "NameChanger"}
 
     def __init__(self):
-        self.active = False
+        self.config = loader.ModuleConfig(
+            loader.ConfigValue(
+                "timezone",
+                "UTC+6",
+                "Часовой пояс для времени",
+                validator=loader.validators.String()
+            ),
+        )
         self.task = None
+        self.is_active = False
 
     async def client_ready(self, client, db):
         self.client = client
         self.db = db
-        if self.db.get("NameUpdater", "active", False):
-            self.active = True
-            self.task = asyncio.create_task(self.update_loop())
+        
+        # Проверяем, был ли модуль активен
+        self.is_active = self.db.get("NameChanger", "active", False)
+        if self.is_active:
+            await self._start_changing()
 
-    async def update_name(self):
-        """Обновляет имя"""
+    def _get_time(self):
+        """Получает текущее время в UTC+6"""
         try:
-            # Простое вычисление UTC+6
-            utc_hour = datetime.utcnow().hour
-            minute = datetime.utcnow().minute
-            utc6_hour = (utc_hour + 6) % 24
-            
-            new_name = f"Lerman | {utc6_hour:02d}:{minute:02d} | #KERNEL"
-            
-            # Прямой вызов API
-            from herokutl import functions
-            await self.client(functions.account.UpdateProfile(
-                first_name=new_name
-            ))
+            # UTC+6 это Etc/GMT-6 в pytz
+            tz = pytz.timezone("Etc/GMT-6")
+            return datetime.now(tz).strftime("%H:%M")
         except:
-            pass  # Игнорируем все ошибки
+            # Если ошибка, используем локальное время +6 часов
+            return (datetime.utcnow() + pytz.utc._utcoffset).strftime("%H:%M")
 
-    async def update_loop(self):
-        """Цикл обновления"""
-        while self.active:
-            await self.update_name()
-            await asyncio.sleep(60)
+    async def _change_name_once(self):
+        """Меняет имя один раз"""
+        try:
+            current_time = self._get_time()
+            new_name = f"Lerman | {current_time} | #KERNEL"
+            
+            # Простая смена имени
+            result = await self.client(
+                self.client.functions.account.UpdateProfile(
+                    first_name=new_name,
+                    last_name=""
+                )
+            )
+            return True
+        except Exception as e:
+            # Если имя не изменилось (уже такое же) - это не ошибка
+            if "not modified" not in str(e).lower():
+                print(f"[NameChanger] Ошибка: {e}")
+            return True
 
-    @loader.command()
-    async def startname(self, message: Message):
-        """Включить автообновление имени"""
-        if not self.active:
-            self.active = True
-            self.db.set("NameUpdater", "active", True)
-            self.task = asyncio.create_task(self.update_loop())
-            await self.update_name()  # Сразу меняем
-        await message.delete()
+    async def _changer_loop(self):
+        """Основной цикл смены имени"""
+        while self.is_active:
+            await self._change_name_once()
+            await asyncio.sleep(60)  # Ждем минуту
 
-    @loader.command()
-    async def stopname(self, message: Message):
-        """Выключить автообновление имени"""
-        if self.active:
-            self.active = False
-            self.db.set("NameUpdater", "active", False)
-            if self.task:
+    async def _start_changing(self):
+        """Запускает смену имени"""
+        if self.task:
+            try:
                 self.task.cancel()
-        await message.delete()
+            except:
+                pass
+        
+        self.is_active = True
+        self.db.set("NameChanger", "active", True)
+        
+        # Первое изменение
+        await self._change_name_once()
+        
+        # Запускаем цикл
+        self.task = asyncio.create_task(self._changer_loop())
 
-    async def on_unload(self):
+    async def _stop_changing(self):
+        """Останавливает смену имени"""
+        self.is_active = False
+        self.db.set("NameChanger", "active", False)
+        
         if self.task:
             self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+            self.task = None
+
+    @loader.command(
+        ru_doc="Запустить автоматическую смену имени"
+    )
+    async def startname(self, message: Message):
+        """Запустить смену имени"""
+        if self.is_active:
+            await message.delete()
+            return
+        
+        await self._start_changing()
+        await message.delete()
+
+    @loader.command(
+        ru_doc="Остановить автоматическую смену имени"
+    )
+    async def stopname(self, message: Message):
+        """Остановить смену имени"""
+        if not self.is_active:
+            await message.delete()
+            return
+        
+        await self._stop_changing()
+        await message.delete()
+
+    @loader.command(
+        ru_doc="Проверить работу модуля (тестовая смена имени)"
+    )
+    async def nametest(self, message: Message):
+        """Тестовая смена имени"""
+        success = await self._change_name_once()
+        if success:
+            await message.edit("✅ Имя успешно изменено!")
+            await asyncio.sleep(2)
+            await message.delete()
+        else:
+            await message.edit("❌ Не удалось изменить имя")
+            await asyncio.sleep(2)
+            await message.delete()
+
+    async def on_unload(self):
+        """При выгрузке модуля"""
+        await self._stop_changing()
